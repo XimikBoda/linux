@@ -32,6 +32,15 @@
 # endif
 #endif
 
+#ifdef CONFIG_CPU_ARM7EJS
+# ifdef CPU_NAME
+#  undef  MULTI_CPU
+#  define MULTI_CPU
+# else
+#  define CPU_NAME cpu_arm7ejs
+# endif
+#endif
+
 #ifdef CONFIG_CPU_ARM720T
 # ifdef CPU_NAME
 #  undef  MULTI_CPU

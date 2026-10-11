@@ -20,6 +20,14 @@ config CPU_ARM7TDMI
 	  Say Y if you want support for the ARM7TDMI processor.
 	  Otherwise, say N.
 
+# ARM7EJS
+config CPU_ARM7EJS
+    bool
+    select CPU_32v5
+	select CPU_ABRT_NOMMU
+    select CPU_PABRT_LEGACY
+    select CPU_CACHE_V4
+
 # ARM720T
 config CPU_ARM720T
 	bool
