@@ -325,6 +325,8 @@ choice
 	default ARM_SINGLE_ARMV7M if !MMU
 	default ARCH_MULTIPLATFORM if MMU
 
+source "arch/arm/mach-mt62xx/Kconfig"
+
 config ARCH_MULTIPLATFORM
 	bool "Allow multiple platforms to be selected"
 	depends on MMU

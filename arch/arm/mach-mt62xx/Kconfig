@@ -1,0 +1,27 @@
+menuconfig ARCH_MT62XX
+    bool "MediaTek MT62xx SoC"
+    depends on !MMU
+    select CPU_ARM7EJS
+    select GENERIC_IRQ_CHIP
+    select GENERIC_CLOCKEVENTS
+    select GENERIC_IRQ_MULTI_HANDLER
+    select REMAP_VECTORS_TO_RAM
+    select SET_MEM_PARAM
+    help
+      Support for MediaTek MT62xx based platforms.
+
+if ARCH_MT62XX
+
+config DRAM_BASE
+    hex "Physical base address of RAM"
+    default 0xF0000000
+
+config DRAM_SIZE
+    hex "Size of RAM"
+    default 0x00800000
+
+config VFP
+    bool
+    default n
+
+endif

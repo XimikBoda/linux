@@ -215,6 +215,11 @@ static inline unsigned int __attribute_const__ read_cpuid_id(void)
 	return processor_id;
 }
 
+static inline unsigned int __attribute_const__ read_cpuid_cachetype(void)
+{
+	return 0;
+}
+
 #endif /* ifdef CONFIG_CPU_CP15 / else */
 
 static inline unsigned int __attribute_const__ read_cpuid_implementor(void)
