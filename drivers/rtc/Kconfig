@@ -1725,6 +1725,10 @@ config RTC_DRV_MT6397
 
 	  If you want to use MediaTek(R) RTC interface, select Y or M here.
 
+config RTC_DRV_MT62XX
+	tristate "MediaTek SoC based RTC"
+	depends on ARCH_MT62XX 
+
 config RTC_DRV_MT7622
 	tristate "MediaTek SoC based RTC"
 	depends on ARCH_MEDIATEK || COMPILE_TEST

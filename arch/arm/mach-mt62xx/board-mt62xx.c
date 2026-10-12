@@ -25,6 +25,7 @@ extern void mt62xx_handle_irq(struct pt_regs *regs);
 
 
 #define UART_BASE   0xA0080000
+#define RTC_BASE    0xA0710000
 #define USB_BASE    0xA0900000
 
 
@@ -48,6 +49,21 @@ static struct platform_device mt62xx_uart_device = {
     .dev        = {
         .platform_data = mt62xx_uart_data,
     },
+};
+
+static struct resource mt62xx_rtc_resources[] = {
+    [0] = {
+        .start = RTC_BASE,
+        .end   = RTC_BASE + 0x0078,
+        .flags = IORESOURCE_MEM,
+    }
+};
+
+static struct platform_device mt62xx_rtc_device = {
+    .name           = "mt62xx-rtc", 
+    .id             = -1,
+    .num_resources  = ARRAY_SIZE(mt62xx_rtc_resources),
+    .resource       = mt62xx_rtc_resources,
 };
 
 static void __init mt62xx_fix_uart_from_maui(void)
@@ -75,6 +91,7 @@ static void __init mt62xx_init(void)
 {
     mt62xx_fix_uart_from_maui();
     platform_device_register(&mt62xx_uart_device);
+    platform_device_register(&mt62xx_rtc_device);
 }
 
 static void mt62xx_restart(enum reboot_mode mode, const char *cmd) {
