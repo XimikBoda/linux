@@ -66,6 +66,26 @@ static struct platform_device mt62xx_rtc_device = {
     .resource       = mt62xx_rtc_resources,
 };
 
+static struct resource mt62xx_usb_resources[] = {
+    [0] = {
+        .start  = USB_BASE,
+        .end    = USB_BASE + 0xFFF,
+        .flags  = IORESOURCE_MEM,
+    },
+    [1] = {
+        .start  = IRQ_USB_LINE,
+        .end    = IRQ_USB_LINE,
+        .flags  = IORESOURCE_IRQ,
+    },
+};
+
+static struct platform_device mt62xx_usb_device = {
+    .name           = "mt62xx-udc",
+    .id             = -1,
+    .num_resources  = ARRAY_SIZE(mt62xx_usb_resources),
+    .resource       = mt62xx_usb_resources,
+};
+
 static void __init mt62xx_fix_uart_from_maui(void)
 {
     writel_relaxed(0x00, UART_BASE + 0x4C);
@@ -92,6 +112,7 @@ static void __init mt62xx_init(void)
     mt62xx_fix_uart_from_maui();
     platform_device_register(&mt62xx_uart_device);
     platform_device_register(&mt62xx_rtc_device);
+    platform_device_register(&mt62xx_usb_device);
 }
 
 static void mt62xx_restart(enum reboot_mode mode, const char *cmd) {

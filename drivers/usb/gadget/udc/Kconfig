@@ -227,6 +227,12 @@ config USB_S3C2410
 	  This driver has been tested on the S3C2410, S3C2412, and
 	  S3C2440 processors.
 
+config USB_MT62XX
+	tristate "MT62XX USB Device Controller"
+	depends on ARCH_MT62XX
+	help
+		For MT62XX
+
 config USB_S3C2410_DEBUG
 	bool "S3C2410 udc debug messages"
 	depends on USB_S3C2410
