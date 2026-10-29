@@ -2312,6 +2312,22 @@ source "drivers/video/fbdev/omap/Kconfig"
 source "drivers/video/fbdev/omap2/Kconfig"
 source "drivers/video/fbdev/mmp/Kconfig"
 
+config FB_MT62XX
+	tristate "MediaTek MT62xx LCD framebuffer support"
+	depends on FB && ARCH_MT62XX
+	select FB_SYS_FILLRECT
+	select FB_SYS_COPYAREA
+	select FB_SYS_IMAGEBLIT
+	select FB_SYS_FOPS
+	help
+	  Framebuffer driver for the parallel LCD controller on MediaTek
+	  MT6250/MT6260 SoCs (Nokia 220/225 feature phones).
+
+	  Drives ST7789S or compatible panels (240x320 RGB565) via 8-bit
+	  parallel (Intel 8080 style) interface using direct CPU writes.
+
+	  If unsure, say N.
+
 config FB_SSD1307
 	tristate "Solomon SSD1307 framebuffer support"
 	depends on FB && I2C
