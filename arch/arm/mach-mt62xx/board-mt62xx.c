@@ -113,10 +113,16 @@ static struct resource mt62xx_lcd_resources[] = {
         .name   = "config-regs",
     },
     {
-        .start  = MIXED_BASE,
-        .end    = MIXED_BASE + 0xFFF,
+        .start  = ISINK_BASE,
+        .end    = ISINK_BASE + 0xFFF,
         .flags  = IORESOURCE_MEM,
-        .name   = "mixed-regs",
+        .name   = "isink-regs",
+    },
+    {
+        .start  = PMU_BASE,
+        .end    = PMU_BASE + 0xFFF,
+        .flags  = IORESOURCE_MEM,
+        .name   = "pmu-regs",
     },
 };
 
