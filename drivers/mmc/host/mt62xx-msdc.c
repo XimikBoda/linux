@@ -134,13 +134,8 @@ static irqreturn_t mt62xx_msdc_irq(int irq, void *dev_id)
     if (!int_status)
         return IRQ_NONE;
 
-    if (int_status & ~MSDC_INT_DIRQ) 
-        pr_info("mt62xx-msdc: IRQ FIRED! status=0x%08x\n", int_status);
-
     if (int_status & MSDC_INT_SDCMDIRQ) { 
         u32 cmd_status = readl(host->base + SDC_CMDSTA);
-
-        pr_info("mt62xx-msdc: CMDSTA = 0x%08x\n", cmd_status);
         
         if (host->mrq && host->mrq->cmd) {
             if (cmd_status & SDC_CMDSTA_CMDTO) 
@@ -152,7 +147,7 @@ static irqreturn_t mt62xx_msdc_irq(int irq, void *dev_id)
     }
 
     if (int_status & MSDC_INT_PINIRQ) {
-        pr_info("mt62xx-msdc: Card inserted or removed!\n");
+        //pr_info("mt62xx-msdc: Card inserted or removed!\n");
         //mmc_detect_change(host->mmc, msecs_to_jiffies(200));
     }
 
@@ -224,13 +219,11 @@ static irqreturn_t mt62xx_msdc_irq(int irq, void *dev_id)
 
     if (int_status & MSDC_INT_SDDATIRQ) {
         u32 dat_status = readl(host->base + SDC_DATSTA);
-        pr_info("mt62xx-msdc: DATA IRQ! DATSTA = 0x%08x\n", dat_status);
         
         if (host->mrq && host->mrq->data && (host->mrq->data->flags & MMC_DATA_READ)) {
             while (sg_miter_next(&host->miter)) {
                 u32 sta = readl(host->base + MSDC_STA);
                 u32 fifocnt = (sta >> 4) & 0x0F;
-                
                 if (sta & MSDC_STA_BF) fifocnt = 8;
                 
                 if (fifocnt == 0) {
@@ -271,17 +264,21 @@ static irqreturn_t mt62xx_msdc_irq(int irq, void *dev_id)
         
         if (host->mrq && host->mrq->data) {
             u32 total_bytes = host->mrq->data->blocks * host->mrq->data->blksz;
-            
             if (host->bytes_xfered >= total_bytes || host->mrq->data->error) {
                 complete(&host->data_done);
-            } else {
-                pr_info("mt62xx-msdc: Block done. Expecting more data (%u/%u bytes)\n", 
-                        host->bytes_xfered, total_bytes);
             }
         }
     }
 
     return IRQ_HANDLED;
+}
+
+static void mt62xx_msdc_wait_idle(struct mt62xx_sd_host *host)
+{
+    u32 timeout = 100000;
+    while ((readl(host->base + SDC_STA) & (SDC_STA_BECMDBUSY | SDC_STA_FECCMDBUSY)) && timeout--) {
+        udelay(1);
+    }
 }
 
 static void mt62xx_msdc_setup_data(struct mt62xx_sd_host *host, struct mmc_request *mrq)
@@ -307,10 +304,6 @@ static void mt62xx_msdc_request(struct mmc_host *mmc, struct mmc_request *mrq)
     u32 cmd_val = cmd->opcode & 0x3F;
     u32 rsptyp = 0;
     int i;
-
-    u32 pin_status = readl(host->base + MSDC_PS);
-    pr_info("mt62xx-msdc: sending CMD%u (arg=0x%08x) | PIN_STATUS=0x%08x\n", 
-            cmd->opcode, cmd->arg, pin_status);
 
 	switch (mmc_resp_type(cmd)) {
 		case MMC_RSP_NONE:
@@ -351,6 +344,7 @@ static void mt62xx_msdc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 
     host->mrq = mrq;
     reinit_completion(&host->cmd_done);
+
     if (mrq->data) {
         reinit_completion(&host->data_done);
 
@@ -361,12 +355,16 @@ static void mt62xx_msdc_request(struct mmc_host *mmc, struct mmc_request *mrq)
             sg_miter_start(&host->miter, mrq->data->sg, mrq->data->sg_len, SG_MITER_FROM_SG | SG_MITER_ATOMIC);
         }
 
+        u32 cfg = readl(host->base + MSDC_CFG);
+        writel(cfg | MSDC_CFG_RST, host->base + MSDC_CFG);
+        msleep(1);
+
         writel(MSDC_STA_FIFOCLR, host->base + MSDC_STA);
         
-        u32 cfg = readl(host->base + MSDC_CFG);
+        cfg = readl(host->base + MSDC_CFG);
         
         cfg &= ~MSDC_CFG_FIFOTHD_M; 
-        cfg |= (1 << 24); 
+        cfg |= (4 << 24); 
         writel(cfg, host->base + MSDC_CFG);
 
         mt62xx_msdc_setup_data(host, mrq); 
@@ -378,11 +376,19 @@ static void mt62xx_msdc_request(struct mmc_host *mmc, struct mmc_request *mrq)
     readl(host->base + MSDC_INT);
     readl(host->base + SDC_DATSTA); 
 
+    mt62xx_msdc_wait_idle(host);
+
     writel(cmd->arg, host->base + SDC_ARG);
     writel(cmd_val, host->base + SDC_CMD);
 
     if (!wait_for_completion_timeout(&host->cmd_done, msecs_to_jiffies(1000))) {
         cmd->error = -ETIMEDOUT;
+        pr_err("\n===================================\n");
+        pr_err("mt62xx-msdc: CMD%u TIMEOUT! arg=0x%08x\n", cmd->opcode, cmd->arg);
+        pr_err("MSDC_STA   = 0x%08x\n", readl(host->base + MSDC_STA));
+        pr_err("SDC_STA    = 0x%08x\n", readl(host->base + SDC_STA));
+        pr_err("SDC_CMDSTA = 0x%08x\n", readl(host->base + SDC_CMDSTA));
+        pr_err("===================================\n");
     } else {
         if (!cmd->error && (rsptyp != 0)) {
             if (rsptyp == SDC_CMD_RSPTYP_R2) { 
@@ -397,21 +403,24 @@ static void mt62xx_msdc_request(struct mmc_host *mmc, struct mmc_request *mrq)
     }
 
     if (mrq->data && !cmd->error) {
-        pr_info("mt62xx-msdc: DATA transfer requested! blocks=%u, blksz=%u, flags=0x%x\n",
-                mrq->data->blocks, mrq->data->blksz, mrq->data->flags);
-                
         if (!wait_for_completion_timeout(&host->data_done, msecs_to_jiffies(3000))) {
-            pr_err("mt62xx-msdc: DATA timeout!\n");
             mrq->data->error = -ETIMEDOUT;
+
+            pr_err("\n===================================\n");
+            pr_err("mt62xx-msdc: DATA TIMEOUT! CMD%u\n", cmd->opcode);
+            pr_err("MSDC_STA   = 0x%08x\n", readl(host->base + MSDC_STA));
+            pr_err("SDC_STA    = 0x%08x\n", readl(host->base + SDC_STA));
+            pr_err("SDC_DATSTA = 0x%08x\n", readl(host->base + SDC_DATSTA));
+            pr_err("Bytes Xfer = %u / %u\n", host->bytes_xfered, 
+                   mrq->data->blocks * mrq->data->blksz);
+            pr_err("===================================\n");
         } else {
-            pr_info("mt62xx-msdc: DATA completion signaled!\n");
         }
     } else if (mrq->data && cmd->error) {
         mrq->data->error = cmd->error;
     }
 
     if (mrq->data) {
-        sg_miter_stop(&host->miter);
         mrq->data->bytes_xfered = host->bytes_xfered;
     }
 
@@ -425,17 +434,9 @@ static void mt62xx_msdc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
     u32 msdc_cfg = readl(host->base + MSDC_CFG);
     u32 sdc_cfg = readl(host->base + SDC_CFG);
 
-    pr_info("mt62xx-msdc: set_ios: clk=%u, width=%u, pwr=%u\n", 
-        ios->clock, ios->bus_width, ios->power_mode);
-
     if (ios->power_mode == MMC_POWER_OFF) {
-        pr_info("mt62xx-msdc: IGNORING POWER_OFF to preserve VXP PMIC state!\n");
-        //if (host->cg_base)
-        //    writel(CG_MSDC_BIT, host->cg_base + CG_SET);
         return;
     } else {
-        //if (host->cg_base)
-        //    writel(CG_MSDC_BIT, host->cg_base + CG_CLR);
             
         msdc_cfg |= MSDC_CFG_VDDPD;
         msdc_cfg |= MSDC_CFG_MSDC;  
@@ -471,6 +472,8 @@ static void mt62xx_msdc_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
         
     sdc_cfg |= SDC_CFG_SIEN; 
     writel(sdc_cfg, host->base + SDC_CFG);
+
+    msleep(5);
 }
 
 static const struct mmc_host_ops mt62xx_msdc_ops = {
@@ -510,12 +513,9 @@ static int mt62xx_msdc_probe(struct platform_device *pdev)
     res_cg = platform_get_resource(pdev, IORESOURCE_MEM, 1);
     host->cg_base = devm_ioremap_resource(&pdev->dev, res_cg);
     if (IS_ERR(host->cg_base)) {
-        pr_warn("mt62xx-msdc: Clock Gating config-regs not found, cg_base is NULL!\n");
         host->cg_base = NULL; 
     } else {
         writel((1<<3), host->cg_base + 0x324);
-        //writel(0x1000, host->cg_base + 0x310);
-        pr_info("mt62xx-msdc: Clock Gating OFF. Controller is AWAKE!\n");
     }
 
     writel(readl(host->base + MSDC_CFG) | MSDC_CFG_RST, host->base + MSDC_CFG);
