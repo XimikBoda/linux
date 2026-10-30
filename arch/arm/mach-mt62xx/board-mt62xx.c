@@ -23,10 +23,12 @@ extern void mt62xx_handle_irq(struct pt_regs *regs);
 #define WDT_MODE_ENABLE    0x0001
 #define WDT_RESTART_KEY    0x1971
 
-
+#define CONFIG_BASE 0xA0010000
 #define UART_BASE   0xA0080000
+#define MSDC_BASE   0xA0130000
 #define RTC_BASE    0xA0710000
 #define USB_BASE    0xA0900000
+
 
 
 static struct plat_serial8250_port mt62xx_uart_data[] = {
@@ -86,6 +88,33 @@ static struct platform_device mt62xx_usb_device = {
     .resource       = mt62xx_usb_resources,
 };
 
+static struct resource mt62xx_msdc_resources[] = {
+    [0] = {
+        .start = MSDC_BASE,
+        .end   = MSDC_BASE + 0xFF,
+        .flags = IORESOURCE_MEM,
+        .name  = "msdc-regs",
+    },
+    [1] = {
+        .start = CONFIG_BASE,
+        .end   = CONFIG_BASE  + 0x0FFF,
+        .flags = IORESOURCE_MEM,
+        .name  = "config-regs",
+    },
+    [2] = {
+        .start = IRQ_MSDC_LINE,
+        .end   = IRQ_MSDC_LINE,
+        .flags = IORESOURCE_IRQ,
+    }
+};
+
+static struct platform_device mt62xx_msdc_device = {
+    .name           = "mt62xx-msdc",
+    .id             = -1,
+    .num_resources  = ARRAY_SIZE(mt62xx_msdc_resources),
+    .resource       = mt62xx_msdc_resources,
+};
+
 static void __init mt62xx_fix_uart_from_maui(void)
 {
     writel_relaxed(0x00, UART_BASE + 0x4C);
@@ -104,7 +133,6 @@ static void __init mt62xx_fix_uart_from_maui(void)
 
 static void __init mt62xx_init_early(void)
 {
-
 }
 
 static void __init mt62xx_init(void)
@@ -113,6 +141,7 @@ static void __init mt62xx_init(void)
     platform_device_register(&mt62xx_uart_device);
     platform_device_register(&mt62xx_rtc_device);
     platform_device_register(&mt62xx_usb_device);
+    platform_device_register(&mt62xx_msdc_device);
 }
 
 static void mt62xx_restart(enum reboot_mode mode, const char *cmd) {

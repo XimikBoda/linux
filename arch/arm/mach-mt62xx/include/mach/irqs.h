@@ -6,5 +6,6 @@
 #define IRQ_UART0_LINE  20
 #define IRQ_GPT_LINE    23
 #define IRQ_USB_LINE    25
+#define IRQ_MSDC_LINE   26
 
 #endif
