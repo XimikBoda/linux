@@ -365,6 +365,7 @@ static void mt62xx_msdc_request(struct mmc_host *mmc, struct mmc_request *mrq)
         
         cfg &= ~MSDC_CFG_FIFOTHD_M; 
         cfg |= (4 << 24); 
+        cfg |= MSDC_CFG_DIRQEN;
         writel(cfg, host->base + MSDC_CFG);
 
         mt62xx_msdc_setup_data(host, mrq); 
@@ -422,6 +423,13 @@ static void mt62xx_msdc_request(struct mmc_host *mmc, struct mmc_request *mrq)
 
     if (mrq->data) {
         mrq->data->bytes_xfered = host->bytes_xfered;
+
+        u32 total = host->mrq->data->blocks * host->mrq->data->blksz;
+        if (host->bytes_xfered >= total) {
+                u32 cfg = readl(host->base + MSDC_CFG);
+                cfg &= ~MSDC_CFG_DIRQEN;
+                writel(cfg, host->base + MSDC_CFG);
+            }
     }
 
     writel(0x00000000, host->base + SDC_IRQMASK0);
@@ -570,7 +578,7 @@ static int mt62xx_msdc_probe(struct platform_device *pdev)
 
     mmc->ops = &mt62xx_msdc_ops;
     mmc->f_min = 400000; 
-    mmc->f_max = 24000000;
+    mmc->f_max = 48000000;
     mmc->ocr_avail = MMC_VDD_32_33 | MMC_VDD_33_34;
     mmc->caps = MMC_CAP_4_BIT_DATA | MMC_CAP_NONREMOVABLE;
 

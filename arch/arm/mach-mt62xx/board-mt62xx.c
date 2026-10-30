@@ -141,7 +141,9 @@ static void __init mt62xx_init(void)
     platform_device_register(&mt62xx_uart_device);
     platform_device_register(&mt62xx_rtc_device);
     platform_device_register(&mt62xx_usb_device);
+#ifdef CONFIG_MMC_MT62XX
     platform_device_register(&mt62xx_msdc_device);
+#endif
 }
 
 static void mt62xx_restart(enum reboot_mode mode, const char *cmd) {
