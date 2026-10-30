@@ -157,33 +157,67 @@ static irqreturn_t mt62xx_msdc_irq(int irq, void *dev_id)
     }
 
     if (int_status & MSDC_INT_DIRQ) {
-        if (host->mrq && host->mrq->data && (host->mrq->data->flags & MMC_DATA_READ)) {
+        if (host->mrq && host->mrq->data) {
             u32 sta = readl(host->base + MSDC_STA);
-            u32 fifocnt = (sta >> 4) & 0x0F;
-            if (sta & MSDC_STA_BF) fifocnt = 8;
+            
+            if (host->mrq->data->flags & MMC_DATA_READ) {
+                u32 fifocnt = (sta >> 4) & 0x0F;
+                if (sta & MSDC_STA_BF) fifocnt = 8;
 
-            while (fifocnt > 0 && sg_miter_next(&host->miter)) {
-                u32 space_in_sg = host->miter.length;
-                u32 available_in_fifo = fifocnt * 4;
-                u32 bytes_to_copy = min(space_in_sg, available_in_fifo);
-                u32 words_to_read = bytes_to_copy / 4;
-                int i;
+                while (fifocnt > 0 && sg_miter_next(&host->miter)) {
+                    u32 space_in_sg = host->miter.length;
+                    u32 available_in_fifo = fifocnt * 4;
+                    u32 bytes_to_copy = min(space_in_sg, available_in_fifo);
+                    u32 words_to_read = bytes_to_copy / 4;
+                    int i;
 
-                if (words_to_read == 0) {
+                    if (words_to_read == 0) {
+                        sg_miter_stop(&host->miter);
+                        break;
+                    }
+
+                    u32 *dst = (u32 *)host->miter.addr;
+                    for (i = 0; i < words_to_read; i++) {
+                        dst[i] = readl(host->base + MSDC_DAT);
+                    }
+                    
+                    host->miter.consumed = words_to_read * 4;
+                    fifocnt -= words_to_read;
+                    host->bytes_xfered += words_to_read * 4;
+                    
                     sg_miter_stop(&host->miter);
-                    break;
                 }
+            } 
+            else if (host->mrq->data->flags & MMC_DATA_WRITE) {
+                u32 fifocnt = (sta >> 4) & 0x0F;
+                u32 free_entries = 8 - fifocnt; 
+                
+                if (sta & MSDC_STA_BE) free_entries = 8;
+                if (sta & MSDC_STA_BF) free_entries = 0;
 
-                u32 *dst = (u32 *)host->miter.addr;
-                for (i = 0; i < words_to_read; i++) {
-                    dst[i] = readl(host->base + MSDC_DAT);
+                while (free_entries > 0 && sg_miter_next(&host->miter)) {
+                    u32 data_in_sg = host->miter.length;
+                    u32 space_in_fifo = free_entries * 4;
+                    u32 bytes_to_copy = min(data_in_sg, space_in_fifo);
+                    u32 words_to_write = bytes_to_copy / 4;
+                    int i;
+
+                    if (words_to_write == 0) {
+                        sg_miter_stop(&host->miter);
+                        break;
+                    }
+
+                    u32 *src = (u32 *)host->miter.addr;
+                    for (i = 0; i < words_to_write; i++) {
+                        writel(src[i], host->base + MSDC_DAT);
+                    }
+                    
+                    host->miter.consumed = words_to_write * 4;
+                    free_entries -= words_to_write;
+                    host->bytes_xfered += words_to_write * 4;
+                    
+                    sg_miter_stop(&host->miter);
                 }
-                
-                host->miter.consumed = words_to_read * 4;
-                fifocnt -= words_to_read;
-                host->bytes_xfered += words_to_read * 4;
-                
-                sg_miter_stop(&host->miter);
             }
         }
     }
@@ -320,14 +354,16 @@ static void mt62xx_msdc_request(struct mmc_host *mmc, struct mmc_request *mrq)
     if (mrq->data) {
         reinit_completion(&host->data_done);
 
+        host->bytes_xfered = 0;
         if (mrq->data->flags & MMC_DATA_READ) {
-            host->bytes_xfered = 0;
             sg_miter_start(&host->miter, mrq->data->sg, mrq->data->sg_len, SG_MITER_TO_SG | SG_MITER_ATOMIC);
+        } else if (mrq->data->flags & MMC_DATA_WRITE) {
+            sg_miter_start(&host->miter, mrq->data->sg, mrq->data->sg_len, SG_MITER_FROM_SG | SG_MITER_ATOMIC);
         }
 
+        writel(MSDC_STA_FIFOCLR, host->base + MSDC_STA);
+        
         u32 cfg = readl(host->base + MSDC_CFG);
-        writel(cfg | MSDC_CFG_RST, host->base + MSDC_CFG); 
-        msleep(1);
         
         cfg &= ~MSDC_CFG_FIFOTHD_M; 
         cfg |= (1 << 24); 
@@ -374,7 +410,7 @@ static void mt62xx_msdc_request(struct mmc_host *mmc, struct mmc_request *mrq)
         mrq->data->error = cmd->error;
     }
 
-    if (mrq->data && (mrq->data->flags & MMC_DATA_READ)) {
+    if (mrq->data) {
         sg_miter_stop(&host->miter);
         mrq->data->bytes_xfered = host->bytes_xfered;
     }
