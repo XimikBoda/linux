@@ -33,6 +33,8 @@ extern void mt62xx_handle_irq(struct pt_regs *regs);
 #define GPIO_BASE   0xA0020000
 #define CONFIG_BASE 0xA0010000
 #define MIXED_BASE  0xA0170000
+#define ISINK_BASE  0xA0700000  /* ISINK current sink (backlight LED driver) */
+#define PMU_BASE    0xA0730000  /* ANA_CFGSYS (backlight clock gating) */
 
 
 static struct plat_serial8250_port mt62xx_uart_data[] = {
