@@ -23,8 +23,9 @@ extern void mt62xx_handle_irq(struct pt_regs *regs);
 #define WDT_MODE_ENABLE    0x0001
 #define WDT_RESTART_KEY    0x1971
 
-
+#define CONFIG_BASE 0xA0010000
 #define UART_BASE   0xA0080000
+#define MSDC_BASE   0xA0130000
 #define RTC_BASE    0xA0710000
 #define USB_BASE    0xA0900000
 
@@ -36,6 +37,7 @@ extern void mt62xx_handle_irq(struct pt_regs *regs);
 #define PMU_BASE    0xA0730000  /* ANA_CFGSYS (backlight clock gating) */
 #define KEYPAD_BASE 0xA00D0000
 #define ADIE_CIRQ_BASE 0xA0760000  /* A-DIE CIRQ (power button EINT0 status) */
+
 
 
 static struct plat_serial8250_port mt62xx_uart_data[] = {
@@ -176,6 +178,33 @@ static struct platform_device mt62xx_powerkey_device = {
     .resource       = mt62xx_powerkey_resources,
 };
 
+static struct resource mt62xx_msdc_resources[] = {
+    [0] = {
+        .start = MSDC_BASE,
+        .end   = MSDC_BASE + 0xFF,
+        .flags = IORESOURCE_MEM,
+        .name  = "msdc-regs",
+    },
+    [1] = {
+        .start = CONFIG_BASE,
+        .end   = CONFIG_BASE  + 0x0FFF,
+        .flags = IORESOURCE_MEM,
+        .name  = "config-regs",
+    },
+    [2] = {
+        .start = IRQ_MSDC_LINE,
+        .end   = IRQ_MSDC_LINE,
+        .flags = IORESOURCE_IRQ,
+    }
+};
+
+static struct platform_device mt62xx_msdc_device = {
+    .name           = "mt62xx-msdc",
+    .id             = -1,
+    .num_resources  = ARRAY_SIZE(mt62xx_msdc_resources),
+    .resource       = mt62xx_msdc_resources,
+};
+
 static void __init mt62xx_init(void)
 {
     platform_device_register(&mt62xx_uart_device);
@@ -191,6 +220,9 @@ static void __init mt62xx_init(void)
 #endif
 #ifdef CONFIG_INPUT_MT62XX_POWERKEY
     platform_device_register(&mt62xx_powerkey_device);
+#endif
+#ifdef CONFIG_MMC_MT62XX
+    platform_device_register(&mt62xx_msdc_device);
 #endif
 }
 

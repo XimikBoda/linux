@@ -903,6 +903,15 @@ config MMC_MTK
 	  This is needed if support for any SD/SDIO/MMC devices is required.
 	  If unsure, say N.
 
+config MMC_MT62XX
+	tristate "MediaTek MT62xx SD/MMC Card Interface support"
+	depends on ARCH_MT62XX
+	help
+	  This selects the MediaTek MT62xx SD/MMC Card Interface controller.
+	  If you have a machine based on MT6250/MT6260 SoC, say Y or M here.
+
+	  If unsure, say N.
+
 config MMC_SDHCI_MICROCHIP_PIC32
         tristate "Microchip PIC32MZDA SDHCI support"
         depends on MMC_SDHCI && PIC32MZDA && MMC_SDHCI_PLTFM
