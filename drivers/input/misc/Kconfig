@@ -851,4 +851,16 @@ config INPUT_SC27XX_VIBRA
 	  To compile this driver as a module, choose M here. The module will
 	  be called sc27xx_vibra.
 
+config INPUT_MT62XX_POWERKEY
+	tristate "MT62XX/MT6260 A-DIE Power Button"
+	depends on ARCH_MT62XX || COMPILE_TEST
+	help
+	  Say Y here to enable support for the power button connected to
+	  the MT6260 A-DIE (Analog Die) EINT0. The driver polls the A-DIE
+	  status register at 100ms intervals.
+	  Single press emits Ctrl+C, hold 5s triggers reboot.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called mt62xx-powerkey.
+
 endif
