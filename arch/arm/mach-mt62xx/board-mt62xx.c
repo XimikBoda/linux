@@ -135,27 +135,8 @@ static struct platform_device mt62xx_lcd_device = {
     .resource       = mt62xx_lcd_resources,
 };
 
-static void __init mt62xx_fix_uart_from_maui(void)
-{
-    writel_relaxed(0x00, UART_BASE + 0x4C);
-
-    writel_relaxed(0x00, UART_BASE + 0x44);
-    writel_relaxed(0x00, UART_BASE + 0x48);
-    writel_relaxed(0x00, UART_BASE + 0x20);
-
-    writel_relaxed(0x07, UART_BASE + 0x08);
-
-    (void)readl_relaxed(UART_BASE + 0x00);
-    (void)readl_relaxed(UART_BASE + 0x14);
-}
-
-static void __init mt62xx_init_early(void)
-{
-}
-
 static void __init mt62xx_init(void)
 {
-    mt62xx_fix_uart_from_maui();
     platform_device_register(&mt62xx_uart_device);
     platform_device_register(&mt62xx_rtc_device);
 #ifdef CONFIG_USB_MT62XX
@@ -184,7 +165,6 @@ static void mt62xx_restart(enum reboot_mode mode, const char *cmd) {
 MACHINE_START(MT62XX, "MediaTek MT62xx")
     .atag_offset    = 0x100,
     .init_irq       = mt62xx_init_irq,
-    .init_early     = mt62xx_init_early,
     .init_time      = mt62xx_timer_init,
     .init_machine   = mt62xx_init,
     .restart        = mt62xx_restart,
