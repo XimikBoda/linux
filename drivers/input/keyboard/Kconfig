@@ -756,4 +756,16 @@ config KEYBOARD_MTK_PMIC
 	  To compile this driver as a module, choose M here: the
 	  module will be called pmic-keys.
 
+	  If unsure, say Y.
+config INPUT_MT62XX_KEYPAD
+	tristate "MT62xx keypad support with T2Input"
+	depends on ARCH_MT62XX
+	default y
+	help
+	  Keypad driver for MT62xx/MT6260 SoCs with T2Input state machine.
+	  Implements two-click positional input for efficient text entry
+	  on numeric keypads. Works directly with fbcon for console input.
+
+	  If unsure, say Y.
+
 endif

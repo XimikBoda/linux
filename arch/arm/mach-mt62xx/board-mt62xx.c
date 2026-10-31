@@ -29,6 +29,15 @@ extern void mt62xx_handle_irq(struct pt_regs *regs);
 #define RTC_BASE    0xA0710000
 #define USB_BASE    0xA0900000
 
+/* LCD controller and related registers */
+#define LCD_BASE    0xA0450000
+#define GPIO_BASE   0xA0020000
+#define CONFIG_BASE 0xA0010000
+#define ISINK_BASE  0xA0700000  /* ISINK current sink (backlight LED driver) */
+#define PMU_BASE    0xA0730000  /* ANA_CFGSYS (backlight clock gating) */
+#define KEYPAD_BASE 0xA00D0000
+#define ADIE_CIRQ_BASE 0xA0760000  /* A-DIE CIRQ (power button EINT0 status) */
+
 
 
 static struct plat_serial8250_port mt62xx_uart_data[] = {
@@ -62,7 +71,7 @@ static struct resource mt62xx_rtc_resources[] = {
 };
 
 static struct platform_device mt62xx_rtc_device = {
-    .name           = "mt62xx-rtc", 
+    .name           = "mt62xx-rtc",
     .id             = -1,
     .num_resources  = ARRAY_SIZE(mt62xx_rtc_resources),
     .resource       = mt62xx_rtc_resources,
@@ -86,6 +95,87 @@ static struct platform_device mt62xx_usb_device = {
     .id             = -1,
     .num_resources  = ARRAY_SIZE(mt62xx_usb_resources),
     .resource       = mt62xx_usb_resources,
+};
+
+/* LCD framebuffer platform device */
+static struct resource mt62xx_lcd_resources[] = {
+    {
+        .start  = LCD_BASE,
+        .end    = LCD_BASE + 0xFFF,
+        .flags  = IORESOURCE_MEM,
+        .name   = "lcd-regs",
+    },
+    {
+        .start  = GPIO_BASE,
+        .end    = GPIO_BASE + 0xFFF,
+        .flags  = IORESOURCE_MEM,
+        .name   = "gpio-regs",
+    },
+    {
+        .start  = CONFIG_BASE,
+        .end    = CONFIG_BASE + 0xFFF,
+        .flags  = IORESOURCE_MEM,
+        .name   = "config-regs",
+    },
+    {
+        .start  = ISINK_BASE,
+        .end    = ISINK_BASE + 0xFFF,
+        .flags  = IORESOURCE_MEM,
+        .name   = "isink-regs",
+    },
+    {
+        .start  = PMU_BASE,
+        .end    = PMU_BASE + 0xFFF,
+        .flags  = IORESOURCE_MEM,
+        .name   = "pmu-regs",
+    },
+};
+
+static struct platform_device mt62xx_lcd_device = {
+    .name           = "mt62xx-fb",
+    .id             = -1,
+    .num_resources  = ARRAY_SIZE(mt62xx_lcd_resources),
+    .resource       = mt62xx_lcd_resources,
+};
+
+/* Keypad device */
+static struct resource mt62xx_keypad_resources[] = {
+    {
+        .start  = KEYPAD_BASE,
+        .end    = KEYPAD_BASE + 0x1F,
+        .flags  = IORESOURCE_MEM,
+        .name   = "keypad-regs",
+    },
+    {
+        .start  = 21,  /* IRQ_KPAD_CODE mapped to hardware line 21 */
+        .end    = 21,
+        .flags  = IORESOURCE_IRQ,
+        .name   = "keypad-irq",
+    },
+};
+
+static struct platform_device mt62xx_keypad_device = {
+    .name           = "mt62xx-keypad",
+    .id             = -1,
+    .num_resources  = ARRAY_SIZE(mt62xx_keypad_resources),
+    .resource       = mt62xx_keypad_resources,
+};
+
+/* Power button device (A-DIE EINT0, polled from userspace register) */
+static struct resource mt62xx_powerkey_resources[] = {
+    {
+        .start  = ADIE_CIRQ_BASE,
+        .end    = ADIE_CIRQ_BASE + 0xFFF,
+        .flags  = IORESOURCE_MEM,
+        .name   = "adie-regs",
+    },
+};
+
+static struct platform_device mt62xx_powerkey_device = {
+    .name           = "mt62xx-powerkey",
+    .id             = -1,
+    .num_resources  = ARRAY_SIZE(mt62xx_powerkey_resources),
+    .resource       = mt62xx_powerkey_resources,
 };
 
 static struct resource mt62xx_msdc_resources[] = {
@@ -115,32 +205,22 @@ static struct platform_device mt62xx_msdc_device = {
     .resource       = mt62xx_msdc_resources,
 };
 
-static void __init mt62xx_fix_uart_from_maui(void)
-{
-    writel_relaxed(0x00, UART_BASE + 0x4C);
-
-    writel_relaxed(0x00, UART_BASE + 0x44);
-    writel_relaxed(0x00, UART_BASE + 0x48);
-    writel_relaxed(0x00, UART_BASE + 0x20);
-
-    writel_relaxed(0x07, UART_BASE + 0x08);
-
-    (void)readl_relaxed(UART_BASE + 0x00);
-    (void)readl_relaxed(UART_BASE + 0x14);
-}
-
-
-
-static void __init mt62xx_init_early(void)
-{
-}
-
 static void __init mt62xx_init(void)
 {
-    mt62xx_fix_uart_from_maui();
     platform_device_register(&mt62xx_uart_device);
     platform_device_register(&mt62xx_rtc_device);
+#ifdef CONFIG_USB_MT62XX
     platform_device_register(&mt62xx_usb_device);
+#endif
+#ifdef CONFIG_FB_MT62XX
+    platform_device_register(&mt62xx_lcd_device);
+#endif
+#ifdef CONFIG_INPUT_MT62XX_KEYPAD
+    platform_device_register(&mt62xx_keypad_device);
+#endif
+#ifdef CONFIG_INPUT_MT62XX_POWERKEY
+    platform_device_register(&mt62xx_powerkey_device);
+#endif
 #ifdef CONFIG_MMC_MT62XX
     platform_device_register(&mt62xx_msdc_device);
 #endif
@@ -162,9 +242,8 @@ static void mt62xx_restart(enum reboot_mode mode, const char *cmd) {
 }
 
 MACHINE_START(MT62XX, "MediaTek MT62xx")
-    .atag_offset    = 0x100, 
+    .atag_offset    = 0x100,
     .init_irq       = mt62xx_init_irq,
-    .init_early     = mt62xx_init_early,
     .init_time      = mt62xx_timer_init,
     .init_machine   = mt62xx_init,
     .restart        = mt62xx_restart,

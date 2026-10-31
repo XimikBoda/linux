@@ -65,6 +65,29 @@
 
 #include "atags.h"
 
+static char mtk_cpu_name[32] = "";
+
+static int __init setup_mtk_cpu_name(char *str)
+{
+    strlcpy(mtk_cpu_name, str, sizeof(mtk_cpu_name));
+    return 1;
+}
+__setup("mtk_cpu_name=", setup_mtk_cpu_name);
+
+
+static char custom_device_model[64] = "";
+
+static int __init setup_custom_device_model(char *str)
+{
+    strlcpy(custom_device_model, str, sizeof(custom_device_model));
+    int i;
+    for (i = 0; custom_device_model[i]; i++) {
+        if (custom_device_model[i] == '_')
+            custom_device_model[i] = ' ';
+    }
+    return 1;
+}
+__setup("device_model=", setup_custom_device_model);
 
 #if defined(CONFIG_FPE_NWFPE) || defined(CONFIG_FPE_FASTFPE)
 char fpe_type[8];
@@ -1283,7 +1306,14 @@ static int c_show(struct seq_file *m, void *v)
 		seq_printf(m, "CPU revision\t: %d\n\n", cpuid & 15);
 	}
 
-	seq_printf(m, "Hardware\t: %s\n", machine_name);
+	if (mtk_cpu_name[0])
+		seq_printf(m, "Hardware\t: MediaTek %s\n", mtk_cpu_name);
+	else
+		seq_printf(m, "Hardware\t: %s\n", machine_name);
+
+	if (custom_device_model[0] != '\0')
+        seq_printf(m, "Model\t\t: %s\n", custom_device_model);
+
 	seq_printf(m, "Revision\t: %04x\n", system_rev);
 	seq_printf(m, "Serial\t\t: %s\n", system_serial);
 
