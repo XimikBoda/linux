@@ -519,7 +519,7 @@ static int mt62xx_msdc_probe(struct platform_device *pdev)
     }
 
     res_cg = platform_get_resource(pdev, IORESOURCE_MEM, 1);
-    host->cg_base = devm_ioremap_resource(&pdev->dev, res_cg);
+    host->cg_base = devm_ioremap(&pdev->dev, res_cg->start, resource_size(res_cg));
     if (IS_ERR(host->cg_base)) {
         host->cg_base = NULL; 
     } else {
