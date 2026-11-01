@@ -1,27 +1,26 @@
 /*
  * MT62XX/MT6260 LCD Framebuffer Driver
  *
- * Drives ST7789S or compatible panel (240x320 RGB565) via 8-bit parallel
- * (Intel 8080 style) interface using direct CPU writes to the parallel port.
+ * Drives ST7789S or compatible panel via 8-bit parallel (Intel 8080 style)
+ * interface using direct CPU writes to the parallel port.
+ *
+ * Framebuffer resolution and refresh rate are configurable via kernel cmdline:
+ *   mt62xx_fb.width=240  (default 240)
+ *   mt62xx_fb.height=320 (default 320)
+ *   mt62xx_fb.fps=15     (default 15)
+ *
+ * Framebuffer memory: dynamically allocated with kmalloc (order-N page
+ * allocation under the hood). For 240x320x16bpp = 150KB this is a single
+ * order-6 buddy allocation (256KB) with the tail trimmed by the slab
+ * allocator. Lowest practical pressure for a dynamic allocation.
+ *
+ * Data written to the buffer is NOT sent directly to LCD (no DMA).
+ * A periodic work queue reads from the buffer and writes pixel data
+ * to the LCD parallel port manually.
  *
  * Write width rules (from proven working devmem sequence):
  *   - Commands and parameters: writew (16-bit) to PARALLEL0_A0_LOW/HIGH
  *   - Pixel data after RAMWR:  writeb (8-bit) to PARALLEL0_A0_HIGH
- *
- * Init sequence order (matches working devmem exactly):
- *   1. Enable clocks (PDN_CON0_CLR = LCD + SLCD bits)
- *   2. Read PARALLEL0_CONFIG (verify MAUI left it correct)
- *   3. LCD controller soft reset (LCD_START: 0 -> 1 -> 0)
- *   4. SLPOUT + 120ms delay
- *   5. DISPON + 120ms delay
- *   6. Set PARALLEL_PDW = 0x00020000 (8-bit bus, period=2)
- *   7. MADCTL=0x00, COLMOD=0x55 (RGB565)
- *   8. Backlight on (ISINK channels + PMU clock)
- *   9. Push framebuffer via CASET/RASET/RAMWR + byte pixel writes
- *
- * Framebuffer updates use a periodic delayed_work (NOT deferred IO) because
- * deferred IO requires MMU page dirty tracking which is unavailable on
- * no-MMU (uClinux) systems. The work reschedules itself to maintain LCD_FRAMERATE.
  */
 
 #include <linux/module.h>
@@ -33,16 +32,30 @@
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
+#include <linux/string.h>
 #include "mt62xx-fb.h"
 
 #define DRIVER_NAME "mt62xx-fb"
 
-#define LCD_FRAMERATE   15
-#define LCD_WIDTH       240
-#define LCD_HEIGHT      320
+/* Default framebuffer parameters (overridable via kernel cmdline) */
+#define DEFAULT_WIDTH   240
+#define DEFAULT_HEIGHT  320
+#define DEFAULT_FPS     15
+
+static int fb_width = DEFAULT_WIDTH;
+static int fb_height = DEFAULT_HEIGHT;
+static int fb_fps = DEFAULT_FPS;
+
+module_param_named(width, fb_width, int, 0444);
+MODULE_PARM_DESC(width, "Framebuffer width in pixels (default: 240)");
+module_param_named(height, fb_height, int, 0444);
+MODULE_PARM_DESC(height, "Framebuffer height in pixels (default: 320)");
+module_param_named(fps, fb_fps, int, 0444);
+MODULE_PARM_DESC(fps, "Framebuffer refresh rate in Hz (default: 15)");
+
 #define LCD_BPP         16
-#define LCD_FB_SIZE     (LCD_WIDTH * LCD_HEIGHT * LCD_BPP / 8)
-#define LCD_FB_PIXELS   (LCD_WIDTH * LCD_HEIGHT)
+#define LCD_FB_SIZE(w, h)   ((w) * (h) * LCD_BPP / 8)
+#define LCD_FB_PIXELS(w, h) ((w) * (h))
 
 /* Delay constants (milliseconds) */
 #define SLEEP_EXIT_DELAY_MS     120
@@ -58,9 +71,6 @@
 /* MADCTL value: normal orientation, no rotation/mirror */
 #define MADCTL_NORMAL           0x00
 
-/* Static framebuffer -- no dynamic allocation, no page allocator impact */
-static u16 mt62xx_fb_buffer[LCD_FB_PIXELS] __aligned(4);
-
 struct mt62xx_fb_info {
 	struct fb_info *info;
 	struct platform_device *pdev;
@@ -69,8 +79,15 @@ struct mt62xx_fb_info {
 	void __iomem *config_base;
 	void __iomem *isink_base;
 	void __iomem *pmu_base;
-	u16 *fb_virt;
-	unsigned long fb_phys;
+
+	/* Framebuffer -- dynamically allocated kernel memory */
+	void *fb_virt;               /* kmalloc'd virtual address */
+	unsigned long fb_phys;       /* physical address (for info only) */
+	int width;
+	int height;
+	int fps;
+	unsigned long fb_size;
+
 	bool panel_initialized;
 	struct delayed_work update_work;
 };
@@ -177,13 +194,14 @@ static void lcd_panel_init(struct mt62xx_fb_info *par)
 
 /* ============================================================================
  * Region Write -- CASET/RASET use 16-bit, pixel data uses 8-bit
+ * Reads pixels from the MAUI framebuffer (ioremap'd memory)
  * ============================================================================ */
 
 static void lcd_send_region(struct mt62xx_fb_info *par, u32 x0, u32 y0,
 			    u32 x1, u32 y1)
 {
 	u32 x, y;
-	u16 *fb = par->fb_virt;
+	u16 *fb = (u16 *)par->fb_virt;
 
 	/* CASET (set column address) */
 	lcd_cmd(par, MIPI_DCS_SET_COLUMN_ADDRESS);
@@ -202,10 +220,11 @@ static void lcd_send_region(struct mt62xx_fb_info *par, u32 x0, u32 y0,
 	/* RAMWR (start memory write) */
 	lcd_cmd(par, MIPI_DCS_WRITE_MEMORY_START);
 
-	/* Pixel data -- 8-bit writes (high byte, low byte per pixel) */
+	/* Pixel data -- 8-bit writes (high byte, low byte per pixel)
+	 * Read from kmalloc'd framebuffer (regular kernel memory) */
 	for (y = y0; y <= y1; y++) {
 		for (x = x0; x <= x1; x++) {
-			u16 pixel = fb[y * LCD_WIDTH + x];
+			u16 pixel = fb[y * par->width + x];
 			lcd_pixel_byte(par, (pixel >> 8) & 0xFF);
 			lcd_pixel_byte(par, pixel & 0xFF);
 		}
@@ -270,7 +289,7 @@ static void lcd_backlight_off(struct mt62xx_fb_info *par)
  * to our buffer but the deferred IO callback never fires.
  *
  * Instead, we use a periodic delayed_work that unconditionally pushes
- * the entire framebuffer to the panel every HZ / LCD_FRAMERATE ms.
+ * the entire framebuffer to the panel every HZ / fps jiffies.
  * ============================================================================ */
 
 static void mt62xx_fb_update_work(struct work_struct *work)
@@ -281,10 +300,11 @@ static void mt62xx_fb_update_work(struct work_struct *work)
 	if (!par->panel_initialized)
 		return;
 
-	lcd_send_region(par, 0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1);
+	lcd_send_region(par, 0, 0, par->width - 1, par->height - 1);
 
 	/* Reschedule ourselves for the next frame using system_wq */
-	queue_delayed_work(system_wq, &par->update_work, HZ / LCD_FRAMERATE);
+	queue_delayed_work(system_wq, &par->update_work,
+			     par->fps > 0 ? HZ / par->fps : HZ / DEFAULT_FPS);
 }
 
 /* ============================================================================
@@ -360,7 +380,17 @@ static int mt62xx_fb_probe(struct platform_device *pdev)
 	struct resource *res;
 	int ret;
 
-	dev_info(&pdev->dev, "probe: start (fb=%d bytes)\n", LCD_FB_SIZE);
+	/* Clamp parameters to sane values */
+	if (fb_width <= 0 || fb_width > 1080)
+		fb_width = DEFAULT_WIDTH;
+	if (fb_height <= 0 || fb_height > 1920)
+		fb_height = DEFAULT_HEIGHT;
+	if (fb_fps <= 0 || fb_fps > 60)
+		fb_fps = DEFAULT_FPS;
+
+	dev_info(&pdev->dev, "probe: start (%dx%d @ %dfps, fb=%d bytes)\n",
+		 fb_width, fb_height, fb_fps,
+		 LCD_FB_SIZE(fb_width, fb_height));
 
 	info = framebuffer_alloc(sizeof(*par), &pdev->dev);
 	if (!info)
@@ -370,70 +400,85 @@ static int mt62xx_fb_probe(struct platform_device *pdev)
 	par->info = info;
 	par->pdev = pdev;
 	par->panel_initialized = false;
+	par->width = fb_width;
+	par->height = fb_height;
+	par->fps = fb_fps;
+	par->fb_size = LCD_FB_SIZE(fb_width, fb_height);
 
-	/* Static buffer -- zero page allocator impact */
-	par->fb_virt = mt62xx_fb_buffer;
-	par->fb_phys = virt_to_phys(mt62xx_fb_buffer);
-	dev_info(&pdev->dev, "probe: fb phys=0x%08lx\n", par->fb_phys);
+	/* Allocate framebuffer from kernel heap.
+	 * kmalloc with GFP_DMA ensures physically contiguous low memory.
+	 * For 150KB this uses one order-6 buddy allocation (256KB) with
+	 * the tail trimmed -- minimal fragmentation impact. */
+	par->fb_virt = kmalloc(par->fb_size, GFP_KERNEL | GFP_DMA);
+	if (!par->fb_virt) {
+		dev_err(&pdev->dev, "probe: failed to allocate %lu bytes for framebuffer\n",
+			par->fb_size);
+		ret = -ENOMEM;
+		goto err_fb;
+	}
+	par->fb_phys = virt_to_phys(par->fb_virt);
+
+	dev_info(&pdev->dev, "probe: fb phys=0x%08lx virt=%p size=%lu\n",
+		 par->fb_phys, par->fb_virt, par->fb_size);
 
 	/* Map LCD controller registers */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "lcd-regs");
 	if (!res) {
 		ret = -ENODEV;
-		goto err_fb;
+		goto err_fb_free;
 	}
 	par->lcd_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(par->lcd_base)) {
 		ret = PTR_ERR(par->lcd_base);
-		goto err_fb;
+		goto err_fb_free;
 	}
 
 	/* Map GPIO registers (for future pin mux configuration) */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "gpio-regs");
 	if (!res) {
 		ret = -ENODEV;
-		goto err_fb;
+		goto err_fb_free;
 	}
 	par->gpio_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(par->gpio_base)) {
 		ret = PTR_ERR(par->gpio_base);
-		goto err_fb;
+		goto err_fb_free;
 	}
 
 	/* Map clock gating / PDN registers */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "config-regs");
 	if (!res) {
 		ret = -ENODEV;
-		goto err_fb;
+		goto err_fb_free;
 	}
 	par->config_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(par->config_base)) {
 		ret = PTR_ERR(par->config_base);
-		goto err_fb;
+		goto err_fb_free;
 	}
 
 	/* Map ISINK registers (backlight LED driver) */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "isink-regs");
 	if (!res) {
 		ret = -ENODEV;
-		goto err_fb;
+		goto err_fb_free;
 	}
 	par->isink_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(par->isink_base)) {
 		ret = PTR_ERR(par->isink_base);
-		goto err_fb;
+		goto err_fb_free;
 	}
 
 	/* Map PMU / ANA_CFGSYS registers (backlight clock gating) */
 	res = platform_get_resource_byname(pdev, IORESOURCE_MEM, "pmu-regs");
 	if (!res) {
 		ret = -ENODEV;
-		goto err_fb;
+		goto err_fb_free;
 	}
 	par->pmu_base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(par->pmu_base)) {
 		ret = PTR_ERR(par->pmu_base);
-		goto err_fb;
+		goto err_fb_free;
 	}
 
 	dev_info(&pdev->dev, "probe: all registers mapped\n");
@@ -451,9 +496,9 @@ static int mt62xx_fb_probe(struct platform_device *pdev)
 	lcd_backlight_on(par);
 
 	/* Step 9: Clear to black and push to panel */
-	memset(par->fb_virt, 0, LCD_FB_SIZE);
+	memset(par->fb_virt, 0, par->fb_size);
 	dev_info(&pdev->dev, "probe: pushing initial frame\n");
-	lcd_send_region(par, 0, 0, LCD_WIDTH - 1, LCD_HEIGHT - 1);
+	lcd_send_region(par, 0, 0, par->width - 1, par->height - 1);
 	dev_info(&pdev->dev, "probe: frame pushed\n");
 
 	/* Setup fb_info */
@@ -462,13 +507,13 @@ static int mt62xx_fb_probe(struct platform_device *pdev)
 	info->fix.visual = FB_VISUAL_TRUECOLOR;
 	info->fix.accel = FB_ACCEL_NONE;
 	info->fix.smem_start = par->fb_phys;
-	info->fix.smem_len = LCD_FB_SIZE;
-	info->fix.line_length = LCD_WIDTH * LCD_BPP / 8;
+	info->fix.smem_len = par->fb_size;
+	info->fix.line_length = par->width * LCD_BPP / 8;
 
-	info->var.xres = LCD_WIDTH;
-	info->var.yres = LCD_HEIGHT;
-	info->var.xres_virtual = LCD_WIDTH;
-	info->var.yres_virtual = LCD_HEIGHT;
+	info->var.xres = par->width;
+	info->var.yres = par->height;
+	info->var.xres_virtual = par->width;
+	info->var.yres_virtual = par->height;
 	info->var.bits_per_pixel = LCD_BPP;
 	info->var.activate = FB_ACTIVATE_NOW;
 	info->var.vmode = FB_VMODE_NONINTERLACED;
@@ -477,13 +522,13 @@ static int mt62xx_fb_probe(struct platform_device *pdev)
 	info->var.blue.offset = 0;   info->var.blue.length = 5;
 
 	info->fbops = &mt62xx_fb_ops;
-	info->screen_base = (char __iomem *)par->fb_virt;
-	info->screen_size = LCD_FB_SIZE;
+	info->screen_base = par->fb_virt;
+	info->screen_size = par->fb_size;
 	info->pseudo_palette = devm_kmalloc(&pdev->dev, sizeof(u32) * 16,
 					    GFP_KERNEL);
 	if (!info->pseudo_palette) {
 		ret = -ENOMEM;
-		goto err_fb;
+		goto err_fb_free;
 	}
 
 	info->flags = FBINFO_DEFAULT | FBINFO_VIRTFB;
@@ -492,21 +537,25 @@ static int mt62xx_fb_probe(struct platform_device *pdev)
 	ret = register_framebuffer(info);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "probe: register_fb failed: %d\n", ret);
-		goto err_fb;
+		goto err_fb_free;
 	}
 
 	platform_set_drvdata(pdev, par);
-	dev_info(&pdev->dev, "probe: fb%d registered\n", info->node);
+	dev_info(&pdev->dev, "probe: fb%d registered (%dx%d @ %dfps)\n",
+		 info->node, par->width, par->height, par->fps);
 
 	/* Start periodic updates using system_wq (no dedicated thread).
 	 * Using system_wq avoids allocating a kernel thread (~8KB stack)
 	 * which would add memory pressure on this low memory system. */
 	INIT_DELAYED_WORK(&par->update_work, mt62xx_fb_update_work);
-	queue_delayed_work(system_wq, &par->update_work, HZ / LCD_FRAMERATE);
+	queue_delayed_work(system_wq, &par->update_work,
+			     par->fps > 0 ? HZ / par->fps : HZ / DEFAULT_FPS);
 
 	dev_info(&pdev->dev, "probe: SUCCESS -- periodic update started\n");
 	return 0;
 
+err_fb_free:
+	kfree(par->fb_virt);
 err_fb:
 	framebuffer_release(info);
 	dev_err(&pdev->dev, "probe: FAILED %d\n", ret);
@@ -529,6 +578,8 @@ static int mt62xx_fb_remove(struct platform_device *pdev)
 		lcd_cmd(par, MIPI_DCS_ENTER_SLEEP_MODE);
 		msleep(SLEEP_EXIT_DELAY_MS);
 	}
+
+	kfree(par->fb_virt);
 	framebuffer_release(info);
 	return 0;
 }
